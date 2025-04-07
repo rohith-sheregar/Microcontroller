@@ -1,4 +1,4 @@
-     AREA PRG,CODE,READONLY
+     AREA Sample3,CODE,READONLY
 START
      MOV R0,#0
      MOV R1,#10
