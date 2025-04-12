@@ -1,0 +1,175 @@
+#include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "DHT.h"
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_I2C_ADDRESS 0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+#define SOIL_SENSOR_PIN 34
+#define TEMP_SENSOR_PIN 32
+#define DHTTYPE DHT11
+DHT dht(TEMP_SENSOR_PIN, DHTTYPE);
+
+// WiFi Credentials
+const char* ssid = "RedmiK50i";       // Replace with your mobile hotspot name
+const char* password = "12345678"; // Replace with your hotspot pass
+
+// Emoji Bitmaps
+const unsigned char smileyBitmap[] PROGMEM = {
+  0b00111100, 0b00000000,
+  0b01000010, 0b00000000,
+  0b10100101, 0b00000000,
+  0b10000001, 0b00000000,
+  0b10100101, 0b00000000,
+  0b10011001, 0b00000000,
+  0b01000010, 0b00000000,
+  0b00111100, 0b00000000
+};
+const unsigned char neutralBitmap[] PROGMEM = {
+  0b00111100, 0b00000000,
+  0b01000010, 0b00000000,
+  0b10000001, 0b00000000,
+  0b10011001, 0b00000000,
+  0b10011001, 0b00000000,
+  0b10011001, 0b00000000,
+  0b01000010, 0b00000000,
+  0b00111100, 0b00000000
+};
+const unsigned char frownBitmap[] PROGMEM = {
+  0b00111100, 0b00000000,
+  0b01000010, 0b00000000,
+  0b10000001, 0b00000000,
+  0b10100101, 0b00000000,
+  0b10011001, 0b00000000,
+  0b10100101, 0b00000000,
+  0b01000010, 0b00000000,
+  0b00111100, 0b00000000
+};
+
+// Calibration
+int rawDistilled = 0;
+int rawDrinkingLow = 800;
+int rawDrinkingHigh = 1600;
+int rawHard = 1200;
+int rawAir = 4095;
+
+float ppmDistilled = 10.0;
+float ppmDrinking = 200.0;
+float ppmHard = 500.0;
+
+float mapRawToPPM(int raw) {
+  if (raw >= 3900) return 0;
+  else if (raw <= rawDistilled) return ppmDistilled;
+  else if (raw >= rawHard) return ppmHard;
+  else if (raw >= rawDrinkingLow && raw <= rawDrinkingHigh)
+    return map(raw, rawDrinkingLow, rawDrinkingHigh, 100, ppmDrinking);
+  else
+    return map(raw, rawDistilled, rawDrinkingLow, ppmDistilled, 100);
+}
+
+void connectToWiFi() {
+  WiFi.begin(ssid, password);
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.println("Connecting WiFi...");
+  display.display();
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  display.clearDisplay();
+  if (WiFi.status() == WL_CONNECTED) {
+    display.setCursor(0, 0);
+    display.print("WiFi Connected");
+    display.setCursor(0, 10);
+    display.print("IP: ");
+    display.println(WiFi.localIP());
+  } else {
+    display.setCursor(0, 0);
+    display.print("WiFi Failed");
+  }
+  display.display();
+  delay(2000);
+}
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  pinMode(SOIL_SENSOR_PIN, INPUT);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDRESS)) {
+    Serial.println(F("SSD1306 failed"));
+    while (1);
+  }
+
+  display.clearDisplay();
+  display.display();
+
+  connectToWiFi();
+}
+
+void loop() {
+  int rawValue = analogRead(SOIL_SENSOR_PIN);
+  float temperature = dht.readTemperature();
+  if (isnan(temperature)) temperature = 25.0;
+
+  float tds = mapRawToPPM(rawValue);
+  float ec25 = tds / (1 + 0.02 * (temperature - 25));
+  if (ec25 < 0) ec25 = 0;
+
+  const char* quality;
+  const unsigned char* emoji;
+
+  if (rawValue >= 3900) {
+    quality = "Air";
+    emoji = neutralBitmap;
+  } else if (ec25 <= 120) {
+    quality = "Good";
+    emoji = smileyBitmap;
+  } else if (ec25 <= 400) {
+    quality = "Moderate";
+    emoji = neutralBitmap;
+  } else {
+    quality = "Poor";
+    emoji = frownBitmap;
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println(F("Watero"));
+
+  display.setCursor(0, 15);
+  display.print(F("TDS: "));
+  display.print(ec25, 1);
+  display.println(F(" ppm"));
+
+  display.setCursor(0, 30);
+  display.print(F("Temp: "));
+  display.print(temperature);
+  display.println(F(" C"));
+
+  display.setCursor(0, 45);
+  display.print(F("Quality: "));
+  display.print(quality);
+  display.drawBitmap(100, 45, emoji, 10, 8, SSD1306_WHITE);
+  display.display();
+
+  Serial.print("Raw: "); Serial.print(rawValue);
+  Serial.print(" | TDS: "); Serial.print(ec25);
+  Serial.print(" ppm | Temp: "); Serial.print(temperature);
+  Serial.print(" C | Quality: "); Serial.println(quality);
+
+  delay(2000);
+}
